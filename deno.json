@@ -1,0 +1,8 @@
+{
+	"deploy": {
+		"project": "d34adfe4-bbcd-4dd4-993d-735c409d9434",
+		"exclude": ["**/node_modules"],
+		"include": [],
+		"entrypoint": "build\\index.js"
+	}
+}
