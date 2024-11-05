@@ -21,6 +21,127 @@
 	let cursorPosition = 0;
 	let previousLength = 0;
 	let isBackspace = false;
+	let selectedLanguage = $state<string>('');
+
+	const languages = [
+		{ code: 'es', name: 'Spanish' },
+		{ code: 'nl', name: 'Dutch' },
+		{ code: 'pl', name: 'Polish' },
+		{ code: 'fr', name: 'French' },
+		{ code: 'de', name: 'German' },
+		{ code: 'it', name: 'Italian' },
+		{ code: 'pt', name: 'Portuguese' }
+	];
+
+	function extractTitles(obj: any): string[] {
+		const titles = new Set<string>();
+
+		function traverse(value: any) {
+			if (typeof value === 'object' && value !== null) {
+				const titleKey = Object.keys(value).find((key) => key.toLowerCase() === 'title');
+				if (titleKey && typeof value[titleKey] === 'string') {
+					titles.add(value[titleKey]);
+				}
+				for (let key in value) {
+					traverse(value[key]);
+				}
+			}
+		}
+
+		traverse(obj);
+		return Array.from(titles);
+	}
+
+	async function translateDisplayNames() {
+		if (selectedLanguage === '') {
+			alert('Please select a language');
+			return;
+		}
+
+		if (!parsedJson || typeof parsedJson !== 'object' || parsedJson === null) {
+			alert('Invalid JSON structure');
+			return;
+		}
+
+		const titles = extractTitles(parsedJson);
+		if (titles.length === 0) {
+			alert('No titles found to translate');
+			return;
+		}
+
+		const response = await fetch('/api/translate', {
+			method: 'POST',
+			headers: {
+				'Content-Type': 'application/json'
+			},
+			body: JSON.stringify({
+				titles: titles,
+				targetLang: selectedLanguage
+			})
+		});
+
+		if (response.ok) {
+			const translations = await response.json();
+			console.log({ translations });
+			const updatedDisplayNames = { ...displayNames };
+
+			Object.entries(translations).forEach(([originalTitle, translatedTitle]) => {
+				if (originalTitle in updatedDisplayNames) {
+					updatedDisplayNames[originalTitle].displayName = translatedTitle as string;
+				}
+			});
+
+			displayNames = updatedDisplayNames;
+			updateJsonWithTranslations(translations);
+			// updateJsonDisplay() is now called inside updateJsonWithTranslations
+		} else {
+			alert('Translation failed. Please try again.');
+		}
+	}
+
+	function updateJsonDisplay() {
+		if (parsedJson && typeof parsedJson === 'object' && parsedJson !== null) {
+			jsonInput = JSON.stringify(parsedJson, null, 2);
+			if (jsonEditor) {
+				jsonEditor.textContent = jsonInput;
+			}
+		}
+	}
+
+	function updateJsonWithTranslations(translations: Record<string, string>) {
+		function traverse(obj: any) {
+			if (typeof obj === 'object' && obj !== null) {
+				const keys = Object.keys(obj);
+				const titleKey = keys.find((k) => k.toLowerCase() === 'title');
+				const displayNameKey = keys.find((k) => k.toLowerCase() === 'displayname');
+
+				if (titleKey && typeof obj[titleKey] === 'string') {
+					const title = obj[titleKey];
+					if (title in translations) {
+						keys.forEach((k) => {
+							if (k.toLowerCase() === 'displayname') {
+								delete obj[k];
+							}
+						});
+						obj['displayName'] = translations[title].trim();
+					}
+				} else if (displayNameKey && typeof obj[displayNameKey] === 'string') {
+					obj[displayNameKey] = obj[displayNameKey].trim();
+				}
+				for (const key of keys) {
+					if (typeof obj[key] === 'object') {
+						traverse(obj[key]);
+					}
+				}
+			}
+		}
+
+		if (parsedJson) {
+			traverse(parsedJson);
+			jsonInput = JSON.stringify(parsedJson, null, 2);
+			updateJsonDisplay();
+		}
+	}
 
 	function extractDisplayNames(value: JsonValue) {
 		if (Array.isArray(value)) {
@@ -44,26 +165,6 @@
 			}
 
 			Object.values(obj).forEach((val) => extractDisplayNames(val));
-		}
-	}
-
-	function updateJsonDisplay() {
-		if (jsonEditor && typeof parsedJson === 'object' && parsedJson !== null) {
-			let highlightedJson = JSON.stringify(parsedJson, null, 2);
-
-			Object.entries(displayNames).forEach(([title, { displayName }]) => {
-				const regex = new RegExp(
-					`"(displayName|DisplayName)":\\s*"${displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`,
-					'g'
-				);
-				highlightedJson = highlightedJson.replace(regex, (match) => {
-					return `"displayName": "<span class="cursor-pointer ${
-						selectedTitle === title ? 'bg-yellow-200' : ''
-					}" onclick="window.selectAndFocusInput('${title}')">${displayName}</span>"`;
-				});
-			});
-
-			jsonEditor.innerHTML = highlightedJson;
 		}
 	}
 
@@ -116,11 +217,6 @@
 		}
 	}
 
-	// Expose the function to the window object
-	if (typeof window !== 'undefined') {
-		(window as any).selectAndFocusInput = selectAndFocusInput;
-	}
-
 	function handleFileUpload(event: Event) {
 		const input = event.target as HTMLInputElement;
 		const file = input.files?.[0];
@@ -150,9 +246,11 @@
 			cursorPosition = range.startOffset;
 		}
 	}
+
 	function handleKeyDown(event: KeyboardEvent) {
 		isBackspace = event.key === 'Backspace';
 	}
+
 	function handleJsonInputChange(event: Event) {
 		const target = event.target as HTMLDivElement;
 		const newContent = target.innerText;
@@ -246,16 +344,19 @@
 			const displayNameKey = Object.keys(obj).find((k) => k.toLowerCase() === 'displayname');
 
 			if (titleKey && !displayNameKey && typeof obj[titleKey] === 'string') {
-				const title = obj[titleKey];
+				const title = obj[titleKey].trim();
 				if (displayNames[title]) {
 					// Use the existing display name if it's already been set
-					obj['displayName'] = displayNames[title].displayName;
+					obj['displayName'] = displayNames[title].displayName.trim();
 				} else {
 					// Otherwise, use the title as the default display name
 					obj['displayName'] = title;
 					// Add to displayNames state
 					displayNames[title] = { title, displayName: title };
 				}
+			} else if (displayNameKey && typeof obj[displayNameKey] === 'string') {
+				// Trim existing displayName values
+				obj[displayNameKey] = obj[displayNameKey].trim();
 			}
 
 			for (const key in obj) {
@@ -311,6 +412,23 @@
 				onchange={handleFileUpload}
 				class="hidden"
 			/>
+		</div>
+		<div class="mb-4 flex space-x-4">
+			<select
+				bind:value={selectedLanguage}
+				class="rounded bg-gray-700 px-4 py-2 text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50"
+			>
+				<option value="">Select language</option>
+				{#each languages as lang}
+					<option value={lang.code}>{lang.name}</option>
+				{/each}
+			</select>
+			<button
+				onclick={translateDisplayNames}
+				class="rounded bg-purple-500 px-4 py-2 text-white hover:bg-purple-600 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-opacity-50"
+			>
+				Translate DisplayNames
+			</button>
 		</div>
 	</div>
 
